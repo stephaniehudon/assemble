@@ -1,0 +1,222 @@
+
+ 
+    Run Megahit assembly on fastq
+    """
+    input:
+        forward = qc_dir + "{sample}/filtered/{sample}.R1.trimmed.filtered.fastq.gz",
+        reverse = qc_dir + "{sample}/filtered/{sample}.R2.trimmed.filtered.fastq.gz"
+    output:
+        assemble_dir + "{sample}/megahit/{sample}.contigs.fa"
+    params:
+        memory = 120,
+        env = config['envs']['assemble']
+    threads:
+        12
+    log:
+        assemble_dir + "logs/assemble_megahit.sample_{sample}.log"
+    benchmark:
+        "benchmarks/assemble/assemble_megahit.sample_{sample}.txt"
+    run:
+        with tempfile.TemporaryDirectory(dir=find_local_scratch(TMP_DIR_ROOT)) as temp_dir:
+            mem_b = params.memory * 1000000000
+            outdir = os.path.dirname(output[0])
+            shell("""
+                  set +u; {params.env}; set -u
+                  
+                  #rm -r {outdir}
+
+                  megahit -1 {input.forward} -2 {input.reverse} \
+                  -m {mem_b} -t {threads} -o {temp_dir}/megahit \
+                  --out-prefix {wildcards.sample} \
+                  2> {log} 1>&2
+
+                  scp {temp_dir}/megahit/{{*.log,*.fa,*.txt}} {outdir}/.
+                  """)
+
+
+rule assemble_metaspades:
+    input:
+        forward = qc_dir + "{sample}/filtered/{sample}.R1.trimmed.filtered.fastq.gz",
+        reverse = qc_dir + "{sample}/filtered/{sample}.R2.trimmed.filtered.fastq.gz"
+    output:
+        assemble_dir + "{sample}/metaspades/{sample}.contigs.fa"
+    log:
+        assemble_dir + "logs/assemble_metaspades.sample_{sample}.log"
+    benchmark:
+        "benchmarks/assemble/assemble_metaspades.sample_{sample}.txt"
+    params:
+        mem=240,
+        env = config['envs']['assemble']
+    threads:
+        12
+    run:
+        with tempfile.TemporaryDirectory(dir=find_local_scratch(TMP_DIR_ROOT)) as temp_dir:
+            outdir = os.path.dirname(output[0])
+            contigs_fp = os.path.abspath(os.path.join(outdir,'contigs.fasta'))
+            shell("""
+                  set +u; {params.env}; set -u
+                  
+                  spades.py --meta -t {threads} -m {params.mem} \
+                  -1 {input.forward} -2 {input.reverse} -o {temp_dir} \
+                  2> {log} 1>&2
+
+                  scp -r {temp_dir}/{{spades.log,*.fasta,assembly_graph*,*.paths}} {outdir}/.
+
+                  ln -s {contigs_fp} {outdir}/{wildcards.sample}.contigs.fa
+                  """)
+
+
+rule assemble_spades:
+    input:
+        forward = qc_dir + "{sample}/filtered/{sample}.R1.trimmed.filtered.fastq.gz",
+        reverse = qc_dir + "{sample}/filtered/{sample}.R2.trimmed.filtered.fastq.gz"
+    output:
+        assemble_dir + "{sample}/spades/{sample}.contigs.fa"
+    log:
+        assemble_dir + "logs/assemble_spades.sample_{sample}.log"
+    benchmark:
+        "benchmarks/assemble/assemble_spades.sample_{sample}.txt"
+    params:
+        mem=240,
+        env = config['envs']['assemble']
+    threads:
+        12
+    run:
+        with tempfile.TemporaryDirectory(dir=find_local_scratch(TMP_DIR_ROOT)) as temp_dir:
+            outdir = os.path.dirname(output[0])
+            contigs_fp = os.path.abspath(os.path.join(outdir,'contigs.fasta'))
+            shell("""
+                  set +u; {params.env}; set -u
+                  
+                  spades.py -t {threads} -m {params.mem} \
+                  -1 {input.forward} -2 {input.reverse} -o {temp_dir} \
+                  2> {log} 1>&2
+
+                  scp -r {temp_dir}/{{spades.log,*.fasta,assembly_graph*,*.paths}} {outdir}/.
+
+                  ln -s {contigs_fp} {outdir}/{wildcards.sample}.contigs.fa
+                  """)
+
+
+rule assemble_metaquast:
+    input:
+        lambda wildcards: expand(assemble_dir + "{sample}/{assembler}/{sample}.contigs.fa",
+                                 assembler = config['params']['assemblers'],
+                                 sample = wildcards.sample)
+    output:
+        done = assemble_dir + "{sample}/metaquast/{sample}.metaquast.done"
+    log:
+        assemble_dir + "logs/assemble_metaquast.sample_{sample}.log"
+    threads:
+        12
+    benchmark:
+        "benchmarks/assemble/assemble_metaquast.sample_{sample}.txt"
+    params:
+        env = config['envs']['assemble']
+    run:
+        with tempfile.TemporaryDirectory(dir=find_local_scratch(TMP_DIR_ROOT)) as temp_dir:
+            outdir = os.path.dirname(output.done)
+            assemblies = ' '.join(input)
+            shell("""
+                  set +u; {params.env}; set -u
+                  
+                  metaquast.py -t {threads} -o {temp_dir}/metaquast \
+                  {assemblies} 2> {log} 1>&2
+
+                  scp -r {temp_dir}/metaquast/* {outdir}/.
+
+                  touch {output.done}
+                  """)
+
+
+rule assemble_quast:
+    input:
+        lambda wildcards: expand(assemble_dir + "{sample}/{assembler}/{sample}.contigs.fa",
+                                 assembler = config['params']['assemblers'],
+                                 sample = wildcards.sample)
+    output:
+        done = assemble_dir + "{sample}/quast/{sample}.quast.done"
+    log:
+        assemble_dir + "logs/assemble_quast.sample_{sample}.log"
+    threads:
+        8
+    benchmark:
+        "benchmarks/assemble/assemble_quast.sample_{sample}.txt"
+    params:
+        env = config['envs']['assemble']
+    run:
+        with tempfile.TemporaryDirectory(dir=find_local_scratch(TMP_DIR_ROOT)) as temp_dir:
+            outdir = os.path.dirname(output.done)
+            assemblies = ' '.join(input)
+            shell("""
+                  set +u; {params.env}; set -u
+                  
+                  quast.py -t {threads} -o {temp_dir}/quast \
+                  {assemblies} 2> {log} 1>&2
+
+                  scp -r {temp_dir}/quast/* {outdir}/.
+
+                  touch {output.done}
+                  """)
+
+rule assemble_per_sample_multiqc:
+    """
+    Runs multiqc for combined input files.
+    """
+    input:
+        expand(assemble_dir + "{sample}/quast/{sample}.quast.done", sample=samples),
+    output:
+        assemble_dir + "multiQC_per_sample/multiqc_report.html"
+    threads:
+        4
+    params:
+        env = config['envs']['assemble']
+    log:
+        qc_dir + "logs/assemble_per_sample_multiqc.log"
+    run:
+        out_dir = os.path.dirname(output[0])
+        shell("""
+              set +u; {params.env}; set -u
+              multiqc -f -o {out_dir} {assemble_dir}/*/quast/report.tsv 2> {log} 1>&2
+              """)
+
+rule metaquast:
+    input:
+        expand(assemble_dir + "{sample}/metaquast/{sample}.metaquast.done",
+               sample=samples)
+
+rule assemble:
+    input:
+        expand(assemble_dir + "{sample}/{assembler}/{sample}.contigs.fa",
+               sample=samples, assembler=config['params']['assemblers']),
+        expand(assemble_dir + "{sample}/quast/{sample}.quast.done",
+               sample=samples),
+        assemble_dir + "multiQC_per_sample/multiqc_report.html"
+
+ruleorder: assemble_coassemble_combine > qc_filter
+
+rule assemble_coassemble_combine:
+    input:
+        forward = lambda wildcards: expand(qc_dir + "{insample}/filtered/{insample}.R1.trimmed.filtered.fastq.gz",
+                                           insample = coassembly_config[wildcards.cosample]),
+        reverse = lambda wildcards: expand(qc_dir + "{insample}/filtered/{insample}.R2.trimmed.filtered.fastq.gz",
+                                           insample = coassembly_config[wildcards.cosample])
+    output:
+        forward = temp(qc_dir + "{cosample}/filtered/{cosample}.R1.trimmed.filtered.fastq.gz"),
+        reverse = temp(qc_dir + "{cosample}/filtered/{cosample}.R2.trimmed.filtered.fastq.gz")
+    run:
+        f_fastqs = ' '.join(input.forward)
+        r_fastqs = ' '.join(input.reverse)
+        shell("""
+              cat {f_fastqs} > {output.forward} 2> {log}
+              cat {r_fastqs} > {output.reverse} 2> {log}
+              """)
+
+
+rule coassemble:
+    input:
+        expand(assemble_dir + "{cosample}/{assembler}/{cosample}.contigs.fa",
+               cosample=coassembly_config.keys(),
+               assembler=config['params']['assemblers']),
+        expand(assemble_dir + "{cosample}/quast/{cosample}.quast.done",
+               cosample=coassembly_config.keys())
